@@ -36,7 +36,7 @@ const config = {
   CALLBACK_URL: process.env.CALLBACK_URL || 'http://localhost:4000/auth/callback',
 
   // Scopes to request
-  SCOPES: 'organizations:read projects:read',
+  SCOPES: 'organizations:read projects:read projects:write',
 
   // Server port
   PORT: process.env.PORT || 4000,
@@ -90,6 +90,7 @@ function generateState() {
 app.get('/', async (req, res) => {
   const user = req.session.user;
   const accessToken = req.session.accessToken;
+  const pendingOAuth = req.session.pendingOAuth; // For popup mode
 
   // Fetch organizations and projects if logged in
   let organizations = [];
@@ -113,6 +114,21 @@ app.get('/', async (req, res) => {
             if (projRes.ok) {
               const projData = await projRes.json();
               org.projects = projData.projects || [];
+
+              // Fetch API key for each project
+              for (const proj of org.projects) {
+                try {
+                  const keyRes = await fetch(`${config.INSFORGE_URL}/projects/v1/${proj.id}/access-api-key`, {
+                    headers: { 'Authorization': `Bearer ${accessToken}` },
+                  });
+                  if (keyRes.ok) {
+                    const keyData = await keyRes.json();
+                    proj.access_api_key = keyData.access_api_key;
+                  }
+                } catch (e) {
+                  // Ignore
+                }
+              }
             }
           } catch (e) {
             org.projects = [];
@@ -130,194 +146,403 @@ app.get('/', async (req, res) => {
     <head>
       <title>InsForge OAuth Example</title>
       <style>
+        * { box-sizing: border-box; }
         body {
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          max-width: 800px;
-          margin: 50px auto;
-          padding: 20px;
+          background: #0a0a0a;
+          color: #e5e5e5;
+          margin: 0;
+          padding: 0;
+          min-height: 100vh;
+        }
+        .container {
+          max-width: 900px;
+          margin: 0 auto;
+          padding: 40px 24px;
         }
         .header {
           text-align: center;
-          margin-bottom: 40px;
+          margin-bottom: 48px;
+        }
+        .header h1 {
+          font-size: 28px;
+          font-weight: 600;
+          margin: 0 0 8px 0;
+          color: #fff;
+        }
+        .header p {
+          color: #737373;
+          margin: 0;
         }
         .btn {
-          display: inline-block;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
           padding: 12px 24px;
-          background: #3b82f6;
-          color: white;
+          background: #22c55e;
+          color: #000;
           text-decoration: none;
           border-radius: 8px;
-          font-size: 16px;
+          font-size: 14px;
+          font-weight: 600;
           border: none;
           cursor: pointer;
+          transition: background 0.2s;
         }
-        .btn:hover { background: #2563eb; }
-        .btn-logout { background: #ef4444; }
-        .btn-logout:hover { background: #dc2626; }
-        .user-info {
-          background: #f3f4f6;
-          padding: 20px;
-          border-radius: 8px;
-          margin: 20px 0;
+        .btn:hover { background: #16a34a; }
+        .btn-secondary {
+          background: #262626;
+          color: #e5e5e5;
+          border: 1px solid #404040;
         }
-        .org-list {
-          display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-          gap: 16px;
-          margin: 20px 0;
+        .btn-secondary:hover { background: #333; }
+        .btn-logout {
+          background: transparent;
+          border: 1px solid #404040;
+          color: #e5e5e5;
+          padding: 8px 16px;
+          font-size: 13px;
         }
-        .org-card {
-          background: white;
-          border: 1px solid #e5e7eb;
-          border-radius: 8px;
-          padding: 20px;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        .btn-logout:hover { background: #262626; border-color: #525252; }
+
+        .card {
+          background: #171717;
+          border: 1px solid #262626;
+          border-radius: 12px;
+          padding: 24px;
+          margin-bottom: 24px;
         }
-        .org-card h3 {
-          margin: 0 0 8px 0;
-          color: #111827;
+        .user-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 16px;
         }
-        .org-card p {
+        .user-header h3 {
           margin: 0;
-          color: #6b7280;
+          font-size: 16px;
+          color: #fff;
+        }
+        .user-details {
+          display: grid;
+          grid-template-columns: auto 1fr;
+          gap: 8px 16px;
           font-size: 14px;
+        }
+        .user-details dt { color: #737373; }
+        .user-details dd { margin: 0; color: #e5e5e5; font-family: monospace; }
+
+        .section-title {
+          font-size: 18px;
+          font-weight: 600;
+          color: #fff;
+          margin: 0 0 20px 0;
+        }
+
+        .org-card {
+          background: #1a1a1a;
+          border: 1px solid #262626;
+          border-radius: 10px;
+          padding: 20px;
+          margin-bottom: 16px;
+        }
+        .org-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          margin-bottom: 12px;
+        }
+        .org-header h4 {
+          margin: 0;
+          font-size: 16px;
+          color: #fff;
         }
         .org-type {
           display: inline-block;
-          padding: 2px 8px;
-          background: #dbeafe;
-          color: #1d4ed8;
-          border-radius: 4px;
+          padding: 4px 10px;
+          background: #22c55e20;
+          color: #22c55e;
+          border-radius: 6px;
           font-size: 12px;
-          margin-top: 8px;
+          font-weight: 500;
         }
-        .projects-section {
-          margin-top: 16px;
-          padding-top: 12px;
-          border-top: 1px solid #e5e7eb;
-        }
-        .projects-section h4 {
-          margin: 0 0 8px 0;
+        .org-desc {
+          color: #737373;
           font-size: 14px;
-          color: #374151;
+          margin: 0 0 16px 0;
         }
-        .project-list {
-          list-style: none;
-          padding: 0;
-          margin: 0;
+
+        .projects-section {
+          border-top: 1px solid #262626;
+          padding-top: 16px;
         }
-        .project-item {
+        .projects-title {
+          font-size: 13px;
+          font-weight: 600;
+          color: #a3a3a3;
+          margin: 0 0 12px 0;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+        .project-card {
+          background: #0a0a0a;
+          border: 1px solid #262626;
+          border-radius: 8px;
+          padding: 16px;
+          margin-bottom: 12px;
+        }
+        .project-card:last-child { margin-bottom: 0; }
+        .project-header {
           display: flex;
           justify-content: space-between;
-          padding: 6px 0;
-          font-size: 13px;
-          border-bottom: 1px solid #f3f4f6;
+          align-items: center;
+          margin-bottom: 12px;
         }
-        .project-item:last-child {
-          border-bottom: none;
+        .project-name {
+          font-weight: 600;
+          color: #fff;
+          font-size: 14px;
         }
-        .project-region {
-          color: #9ca3af;
+        .project-status {
+          display: flex;
+          align-items: center;
+          gap: 6px;
           font-size: 12px;
+          color: #22c55e;
         }
-        .no-projects {
-          margin-top: 12px;
-          font-size: 13px;
-          color: #9ca3af;
+        .project-status::before {
+          content: '';
+          width: 8px;
+          height: 8px;
+          background: #22c55e;
+          border-radius: 50%;
         }
-        pre {
-          background: #1f2937;
-          color: #f9fafb;
-          padding: 16px;
+        .project-details {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .detail-row {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+        .detail-label {
+          font-size: 12px;
+          color: #737373;
+          min-width: 70px;
+        }
+        .detail-value {
+          font-family: 'SF Mono', Monaco, monospace;
+          font-size: 12px;
+          color: #e5e5e5;
+          background: #262626;
+          padding: 6px 10px;
+          border-radius: 6px;
+          flex: 1;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .detail-value.url { color: #60a5fa; }
+        .detail-value.key { color: #fbbf24; }
+
+        .token-section {
+          margin-top: 32px;
+        }
+        .token-box {
+          background: #0a0a0a;
+          border: 1px solid #262626;
           border-radius: 8px;
-          overflow-x: auto;
+          padding: 16px;
+          font-family: 'SF Mono', Monaco, monospace;
           font-size: 12px;
+          color: #737373;
+          word-break: break-all;
+          line-height: 1.6;
         }
-        .section {
-          margin: 30px 0;
+
+        .login-hero {
+          text-align: center;
+          padding: 80px 20px;
         }
-        .section h2 {
-          border-bottom: 2px solid #e5e7eb;
-          padding-bottom: 10px;
+        .login-hero p {
+          color: #737373;
+          margin: 0 0 32px 0;
+          font-size: 16px;
+        }
+        .how-it-works {
+          margin-top: 48px;
+        }
+        .how-it-works h3 {
+          font-size: 16px;
+          color: #fff;
+          margin: 0 0 16px 0;
+        }
+        .how-it-works ol {
+          color: #a3a3a3;
+          line-height: 1.8;
+          padding-left: 20px;
+        }
+        .no-data {
+          color: #525252;
+          font-size: 14px;
+          text-align: center;
+          padding: 24px;
         }
       </style>
     </head>
     <body>
-      <div class="header">
-        <h1>InsForge OAuth Example</h1>
-        <p>Third-party app integrating with InsForge OAuth 2.0</p>
-      </div>
-
-      ${user ? `
-        <div class="user-info">
-          <h3>Logged in as:</h3>
-          <p><strong>User ID:</strong> ${user.id || 'N/A'}</p>
-          <p><strong>Email:</strong> ${user.email || 'N/A'}</p>
-          <br>
-          <a href="/auth/logout" class="btn btn-logout">Logout</a>
+      <div class="container">
+        <div class="header">
+          <h1>InsForge OAuth Demo</h1>
+          <p>Third-party application using InsForge OAuth 2.0</p>
         </div>
 
-        <div class="section">
-          <h2>Your Organizations (${organizations.length})</h2>
-          ${organizations.length > 0 ? `
-            <div class="org-list">
-              ${organizations.map(org => `
-                <div class="org-card">
-                  <h3>${org.name || 'Unnamed'}</h3>
-                  <p>${org.description || 'No description'}</p>
-                  <span class="org-type">${org.type || 'organization'}</span>
-                  ${org.projects && org.projects.length > 0 ? `
-                    <div class="projects-section">
-                      <h4>Projects (${org.projects.length})</h4>
-                      <ul class="project-list">
-                        ${org.projects.map(proj => `
-                          <li class="project-item">
-                            <strong>${proj.name}</strong>
-                            <span class="project-region">${proj.region || 'N/A'}</span>
-                          </li>
-                        `).join('')}
-                      </ul>
-                    </div>
-                  ` : `
-                    <p class="no-projects">No projects</p>
-                  `}
-                </div>
-              `).join('')}
+        ${user ? `
+          <div class="card">
+            <div class="user-header">
+              <h3>Authenticated User</h3>
+              <a href="/auth/logout" class="btn btn-logout">Sign Out</a>
             </div>
-          ` : `
-            <p>No organizations found.</p>
+            <dl class="user-details">
+              <dt>User ID</dt>
+              <dd>${user.id || 'N/A'}</dd>
+              <dt>Email</dt>
+              <dd>${user.email || 'N/A'}</dd>
+            </dl>
+          </div>
+
+          <h2 class="section-title">Organizations (${organizations.length})</h2>
+          ${organizations.length > 0 ? organizations.map(org => `
+            <div class="org-card">
+              <div class="org-header">
+                <h4>${org.name || 'Unnamed'}</h4>
+                <span class="org-type">${org.type || 'organization'}</span>
+              </div>
+              <p class="org-desc">${org.description || 'No description'}</p>
+
+              ${org.projects && org.projects.length > 0 ? `
+                <div class="projects-section">
+                  <h5 class="projects-title">Projects (${org.projects.length})</h5>
+                  ${org.projects.map(proj => `
+                    <div class="project-card">
+                      <div class="project-header">
+                        <span class="project-name">${proj.name}</span>
+                        <span class="project-status">${proj.status || 'active'}</span>
+                      </div>
+                      <div class="project-details">
+                        <div class="detail-row">
+                          <span class="detail-label">API URL</span>
+                          <span class="detail-value url">https://${proj.appkey}.${proj.region}.insforge.app</span>
+                        </div>
+                        <div class="detail-row">
+                          <span class="detail-label">Region</span>
+                          <span class="detail-value">${proj.region}</span>
+                        </div>
+                        ${proj.access_api_key ? `
+                          <div class="detail-row">
+                            <span class="detail-label">API Key</span>
+                            <span class="detail-value key">${proj.access_api_key}</span>
+                          </div>
+                        ` : ''}
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              ` : `
+                <p class="no-data">No projects in this organization</p>
+              `}
+            </div>
+          `).join('') : `
+            <p class="no-data">No organizations found</p>
           `}
-        </div>
 
-        <div class="section">
-          <h2>Access Token</h2>
-          <pre>${accessToken?.substring(0, 80)}...</pre>
-        </div>
-      ` : `
-        <div style="text-align: center; margin: 60px 0;">
-          <p>Click below to login with your InsForge account</p>
-          <br>
-          <a href="/auth/login" class="btn">Login with InsForge</a>
-        </div>
+          <div class="token-section">
+            <h2 class="section-title">Access Token</h2>
+            <div class="token-box">${accessToken}</div>
+          </div>
+        ` : `
+          <div class="login-hero">
+            <p>Connect your InsForge account to access your organizations and projects</p>
+            <div style="display: flex; gap: 16px; justify-content: center; flex-wrap: wrap;">
+              <button onclick="openOAuthPopup()" class="btn">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2"/>
+                  <path d="M9 3v18"/>
+                </svg>
+                Popup Mode
+              </button>
+              <a href="/auth/login" class="btn btn-secondary">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+                  <polyline points="10 17 15 12 10 7"/>
+                  <line x1="15" y1="12" x2="3" y2="12"/>
+                </svg>
+                Redirect Mode
+              </a>
+            </div>
+          </div>
 
-        <div class="section">
-          <h2>How it works</h2>
-          <ol>
-            <li>Click "Login with InsForge"</li>
-            <li>You're redirected to InsForge to login/approve</li>
-            <li>InsForge redirects back with authorization code</li>
-            <li>App exchanges code for tokens (server-to-server)</li>
-            <li>You're logged in!</li>
-          </ol>
-        </div>
-      `}
+          <div class="how-it-works card">
+            <h3>OAuth Flow Modes</h3>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+              <div>
+                <h4 style="color: #22c55e; margin: 0 0 8px 0;">Popup Mode</h4>
+                <ol style="margin: 0; padding-left: 20px;">
+                  <li>Opens popup window</li>
+                  <li>User stays on your app</li>
+                  <li>Uses localStorage event</li>
+                  <li>Better UX for SPAs</li>
+                </ol>
+              </div>
+              <div>
+                <h4 style="color: #60a5fa; margin: 0 0 8px 0;">Redirect Mode</h4>
+                <ol style="margin: 0; padding-left: 20px;">
+                  <li>Full page redirect</li>
+                  <li>Standard OAuth flow</li>
+                  <li>No popup blockers</li>
+                  <li>Works everywhere</li>
+                </ol>
+              </div>
+            </div>
+          </div>
+
+          <script>
+            function openOAuthPopup() {
+              const width = 500;
+              const height = 700;
+              const left = window.screenX + (window.outerWidth - width) / 2;
+              const top = window.screenY + (window.outerHeight - height) / 2;
+
+              const popup = window.open(
+                '/auth/login-popup',
+                'insforge-oauth',
+                \`width=\${width},height=\${height},left=\${left},top=\${top},popup=1\`
+              );
+
+              // Listen for storage event (works across same-origin windows)
+              function handleStorage(event) {
+                if (event.key === 'oauth_complete') {
+                  console.log('[Parent] OAuth complete via localStorage');
+                  localStorage.removeItem('oauth_complete');
+                  window.removeEventListener('storage', handleStorage);
+                  window.location.reload();
+                }
+              }
+              window.addEventListener('storage', handleStorage);
+              console.log('[Parent] Listening for oauth_complete in localStorage...');
+            }
+          </script>
+        `}
+      </div>
     </body>
     </html>
   `);
 });
 
 /**
- * Step 1: Start OAuth flow
+ * Step 1: Start OAuth flow (Redirect mode - legacy)
  *
  * - Generate PKCE verifier and challenge
  * - Generate state for CSRF protection
@@ -353,13 +578,96 @@ app.get('/auth/login', (req, res) => {
 });
 
 /**
+ * Step 1b: Start OAuth flow (Popup mode)
+ * Same as /auth/login but for popup window
+ */
+app.get('/auth/login-popup', (req, res) => {
+  const codeVerifier = generateCodeVerifier();
+  const codeChallenge = generateCodeChallenge(codeVerifier);
+  const state = generateState();
+
+  req.session.oauthState = state;
+  req.session.codeVerifier = codeVerifier;
+  req.session.isPopup = true; // Mark this as popup mode
+
+  const authUrl = new URL(`${config.INSFORGE_URL}/api/oauth/v1/authorize`);
+  authUrl.searchParams.set('client_id', config.INSFORGE_CLIENT_ID);
+  authUrl.searchParams.set('redirect_uri', config.CALLBACK_URL);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('scope', config.SCOPES);
+  authUrl.searchParams.set('state', state);
+  authUrl.searchParams.set('code_challenge', codeChallenge);
+  authUrl.searchParams.set('code_challenge_method', 'S256');
+
+  console.log('Popup: Redirecting to InsForge:', authUrl.toString());
+  res.redirect(authUrl.toString());
+});
+
+/**
+ * Step 2b: OAuth callback for popup mode
+ * Called by parent window after receiving postMessage
+ */
+app.get('/auth/callback-popup', async (req, res) => {
+  const { code, state } = req.query;
+
+  if (state && state !== req.session.oauthState) {
+    return res.status(400).send('Invalid state');
+  }
+
+  const codeVerifier = req.session.codeVerifier;
+  if (!codeVerifier) {
+    return res.status(400).send('Session expired');
+  }
+
+  try {
+    const tokenResponse = await fetch(`${config.INSFORGE_URL}/api/oauth/v1/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: config.CALLBACK_URL,
+        client_id: config.INSFORGE_CLIENT_ID,
+        client_secret: config.INSFORGE_CLIENT_SECRET,
+        code_verifier: codeVerifier,
+      }),
+    });
+
+    const tokens = await tokenResponse.json();
+    if (tokens.error) {
+      return res.status(400).send(`Token error: ${tokens.error}`);
+    }
+
+    req.session.accessToken = tokens.access_token;
+    req.session.refreshToken = tokens.refresh_token;
+    delete req.session.oauthState;
+    delete req.session.codeVerifier;
+
+    const profileResponse = await fetch(`${config.INSFORGE_URL}/auth/v1/profile`, {
+      headers: { 'Authorization': `Bearer ${tokens.access_token}` },
+    });
+    if (profileResponse.ok) {
+      const profile = await profileResponse.json();
+      req.session.user = profile.user;
+    }
+
+    res.redirect('/');
+  } catch (err) {
+    console.error('Popup token exchange failed:', err);
+    res.status(500).send('Token exchange failed');
+  }
+});
+
+/**
  * Step 2: OAuth callback
  *
  * InsForge redirects here after user approves.
+ * This handles BOTH popup mode and redirect mode.
  *
  * - Verify state matches
  * - Exchange code for tokens (server-to-server)
- * - Store tokens in session
+ * - If popup: send postMessage to parent and close
+ * - If redirect: redirect to home page
  */
 app.get('/auth/callback', async (req, res) => {
   const { code, state, error, error_description } = req.query;
@@ -390,6 +698,9 @@ app.get('/auth/callback', async (req, res) => {
   if (!codeVerifier) {
     return sendError('Missing code verifier. Session may have expired.');
   }
+
+  // Check if this was opened as a popup (stored when starting the flow)
+  const isPopup = req.session.isPopup;
 
   try {
     // Exchange code for tokens (server-to-server call)
@@ -443,7 +754,30 @@ app.get('/auth/callback', async (req, res) => {
       req.session.user = profile.user;
     }
 
-    // Redirect to home page
+    // Clean up popup flag
+    delete req.session.isPopup;
+
+    // If popup mode, notify parent via localStorage and close
+    if (isPopup) {
+      return res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head><title>Authorization Complete</title></head>
+        <body>
+          <h2>Authorization successful!</h2>
+          <p>This window will close automatically...</p>
+          <script>
+            // Use localStorage to notify parent (storage event fires in other windows)
+            localStorage.setItem('oauth_complete', Date.now().toString());
+            console.log('[Popup] Set oauth_complete in localStorage');
+            setTimeout(() => window.close(), 500);
+          </script>
+        </body>
+        </html>
+      `);
+    }
+
+    // Redirect mode - redirect to home page
     res.redirect('/');
 
   } catch (err) {

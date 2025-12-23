@@ -62,7 +62,7 @@ curl -X POST http://localhost:3000/api/oauth/v1/clients/register \
   -d '{
     "name": "My Example App",
     "redirect_uris": ["http://localhost:4000/auth/callback"],
-    "allowed_scopes": ["user:read", "organizations:read"]
+    "allowed_scopes": ["organizations:read", "projects:read", "projects:write"]
   }'
 ```
 
