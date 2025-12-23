@@ -12,6 +12,7 @@
  * 6. User is logged in
  */
 
+require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
 const crypto = require('crypto');
@@ -35,7 +36,7 @@ const config = {
   CALLBACK_URL: process.env.CALLBACK_URL || 'http://localhost:4000/auth/callback',
 
   // Scopes to request
-  SCOPES: 'user:read organizations:read',
+  SCOPES: 'organizations:read projects:read',
 
   // Server port
   PORT: process.env.PORT || 4000,
@@ -90,11 +91,11 @@ app.get('/', async (req, res) => {
   const user = req.session.user;
   const accessToken = req.session.accessToken;
 
-  // Fetch organizations if logged in
+  // Fetch organizations and projects if logged in
   let organizations = [];
   if (accessToken) {
     try {
-      const response = await fetch(`${config.INSFORGE_URL}/api/organizations/v1`, {
+      const response = await fetch(`${config.INSFORGE_URL}/organizations/v1`, {
         headers: {
           'Authorization': `Bearer ${accessToken}`,
         },
@@ -102,6 +103,21 @@ app.get('/', async (req, res) => {
       if (response.ok) {
         const data = await response.json();
         organizations = data.organizations || [];
+
+        // Fetch projects for each organization
+        for (const org of organizations) {
+          try {
+            const projRes = await fetch(`${config.INSFORGE_URL}/organizations/v1/${org.id}/projects`, {
+              headers: { 'Authorization': `Bearer ${accessToken}` },
+            });
+            if (projRes.ok) {
+              const projData = await projRes.json();
+              org.projects = projData.projects || [];
+            }
+          } catch (e) {
+            org.projects = [];
+          }
+        }
       }
     } catch (err) {
       console.error('Failed to fetch organizations:', err);
@@ -175,6 +191,40 @@ app.get('/', async (req, res) => {
           font-size: 12px;
           margin-top: 8px;
         }
+        .projects-section {
+          margin-top: 16px;
+          padding-top: 12px;
+          border-top: 1px solid #e5e7eb;
+        }
+        .projects-section h4 {
+          margin: 0 0 8px 0;
+          font-size: 14px;
+          color: #374151;
+        }
+        .project-list {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+        }
+        .project-item {
+          display: flex;
+          justify-content: space-between;
+          padding: 6px 0;
+          font-size: 13px;
+          border-bottom: 1px solid #f3f4f6;
+        }
+        .project-item:last-child {
+          border-bottom: none;
+        }
+        .project-region {
+          color: #9ca3af;
+          font-size: 12px;
+        }
+        .no-projects {
+          margin-top: 12px;
+          font-size: 13px;
+          color: #9ca3af;
+        }
         pre {
           background: #1f2937;
           color: #f9fafb;
@@ -216,6 +266,21 @@ app.get('/', async (req, res) => {
                   <h3>${org.name || 'Unnamed'}</h3>
                   <p>${org.description || 'No description'}</p>
                   <span class="org-type">${org.type || 'organization'}</span>
+                  ${org.projects && org.projects.length > 0 ? `
+                    <div class="projects-section">
+                      <h4>Projects (${org.projects.length})</h4>
+                      <ul class="project-list">
+                        ${org.projects.map(proj => `
+                          <li class="project-item">
+                            <strong>${proj.name}</strong>
+                            <span class="project-region">${proj.region || 'N/A'}</span>
+                          </li>
+                        `).join('')}
+                      </ul>
+                    </div>
+                  ` : `
+                    <p class="no-projects">No projects</p>
+                  `}
                 </div>
               `).join('')}
             </div>
@@ -240,9 +305,9 @@ app.get('/', async (req, res) => {
           <ol>
             <li>Click "Login with InsForge"</li>
             <li>You're redirected to InsForge to login/approve</li>
-            <li>InsForge redirects back with an authorization code</li>
-            <li>This app exchanges the code for tokens (server-to-server)</li>
-            <li>You're now logged in and can see your organizations!</li>
+            <li>InsForge redirects back with authorization code</li>
+            <li>App exchanges code for tokens (server-to-server)</li>
+            <li>You're logged in!</li>
           </ol>
         </div>
       `}
@@ -299,27 +364,31 @@ app.get('/auth/login', (req, res) => {
 app.get('/auth/callback', async (req, res) => {
   const { code, state, error, error_description } = req.query;
 
+  // Helper to send error response
+  const sendError = (message) => {
+    return res.send(`
+      <h1>Authorization Failed</h1>
+      <p>${message}</p>
+      <a href="/">Go back</a>
+    `);
+  };
+
   // Check for errors from InsForge
   if (error) {
     console.error('OAuth error:', error, error_description);
-    return res.send(`
-      <h1>Authorization Failed</h1>
-      <p>Error: ${error}</p>
-      <p>${error_description || ''}</p>
-      <a href="/">Go back</a>
-    `);
+    return sendError(`Error: ${error}. ${error_description || ''}`);
   }
 
   // Verify state (CSRF protection)
   if (state !== req.session.oauthState) {
     console.error('State mismatch:', state, req.session.oauthState);
-    return res.status(400).send('Invalid state parameter. Possible CSRF attack.');
+    return sendError('Invalid state parameter. Possible CSRF attack.');
   }
 
   // Get code verifier from session
   const codeVerifier = req.session.codeVerifier;
   if (!codeVerifier) {
-    return res.status(400).send('Missing code verifier. Session may have expired.');
+    return sendError('Missing code verifier. Session may have expired.');
   }
 
   try {
@@ -345,12 +414,7 @@ app.get('/auth/callback', async (req, res) => {
 
     if (tokens.error) {
       console.error('Token exchange error:', tokens);
-      return res.send(`
-        <h1>Token Exchange Failed</h1>
-        <p>Error: ${tokens.error}</p>
-        <p>${tokens.message || ''}</p>
-        <a href="/">Go back</a>
-      `);
+      return sendError(`Token exchange failed: ${tokens.error}. ${tokens.message || ''}`);
     }
 
     console.log('Tokens received:', {
@@ -368,7 +432,7 @@ app.get('/auth/callback', async (req, res) => {
     delete req.session.codeVerifier;
 
     // Fetch user profile using the access token
-    const profileResponse = await fetch(`${config.INSFORGE_URL}/api/auth/v1/profile`, {
+    const profileResponse = await fetch(`${config.INSFORGE_URL}/auth/v1/profile`, {
       headers: {
         'Authorization': `Bearer ${tokens.access_token}`,
       },
@@ -379,7 +443,7 @@ app.get('/auth/callback', async (req, res) => {
       req.session.user = profile.user;
     }
 
-    // Redirect to home
+    // Redirect to home page
     res.redirect('/');
 
   } catch (err) {
@@ -407,7 +471,7 @@ app.get('/api/organizations', async (req, res) => {
   }
 
   try {
-    const response = await fetch(`${config.INSFORGE_URL}/api/organizations/v1`, {
+    const response = await fetch(`${config.INSFORGE_URL}/organizations/v1`, {
       headers: {
         'Authorization': `Bearer ${accessToken}`,
       },
