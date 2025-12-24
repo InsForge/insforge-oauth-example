@@ -35,8 +35,8 @@ const config = {
   // Your app's callback URL (must match registered redirect_uri)
   CALLBACK_URL: process.env.CALLBACK_URL || 'http://localhost:4000/auth/callback',
 
-  // Scopes to request
-  SCOPES: 'organizations:read projects:read projects:write',
+  // Scopes to request (user:read for profile, others for org/project access)
+  SCOPES: 'user:read organizations:read projects:read projects:write',
 
   // Server port
   PORT: process.env.PORT || 4000,
