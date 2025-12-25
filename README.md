@@ -51,6 +51,8 @@ A simple example showing how third-party apps integrate with InsForge OAuth 2.0.
 
 ## Setup
 
+Migrate backend first!!!
+
 ### 1. Register your app in InsForge
 
 First, register an OAuth client in InsForge to get your credentials:
@@ -62,7 +64,8 @@ curl -X POST http://localhost:3000/api/oauth/v1/clients/register \
   -d '{
     "name": "My Example App",
     "redirect_uris": ["http://localhost:4000/auth/callback"],
-    "allowed_scopes": ["organizations:read", "projects:read", "projects:write"]
+    "allowed_scopes": ["user:read", "organizations:read", "projects:read", "projects:write"],
+    "client_type": "confidential"
   }'
 ```
 
