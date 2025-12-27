@@ -580,15 +580,18 @@ app.get('/auth/login', (req, res) => {
 /**
  * Step 1b: Start OAuth flow (Popup mode)
  * Same as /auth/login but for popup window
+ * Uses state parameter to encode popup mode (more reliable than sessions)
  */
 app.get('/auth/login-popup', (req, res) => {
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = generateCodeChallenge(codeVerifier);
-  const state = generateState();
+  const stateToken = generateState();
+
+  // Encode popup mode in state (format: "token:popup")
+  const state = `${stateToken}:popup`;
 
   req.session.oauthState = state;
   req.session.codeVerifier = codeVerifier;
-  req.session.isPopup = true; // Mark this as popup mode
 
   const authUrl = new URL(`${config.INSFORGE_URL}/api/oauth/v1/authorize`);
   authUrl.searchParams.set('client_id', config.INSFORGE_CLIENT_ID);
@@ -687,6 +690,9 @@ app.get('/auth/callback', async (req, res) => {
     return sendError(`Error: ${error}. ${error_description || ''}`);
   }
 
+  // Check if this is popup mode (encoded in state as "token:popup")
+  const isPopup = state?.endsWith(':popup');
+
   // Verify state (CSRF protection)
   if (state !== req.session.oauthState) {
     console.error('State mismatch:', state, req.session.oauthState);
@@ -698,9 +704,6 @@ app.get('/auth/callback', async (req, res) => {
   if (!codeVerifier) {
     return sendError('Missing code verifier. Session may have expired.');
   }
-
-  // Check if this was opened as a popup (stored when starting the flow)
-  const isPopup = req.session.isPopup;
 
   try {
     // Exchange code for tokens (server-to-server call)
@@ -754,9 +757,6 @@ app.get('/auth/callback', async (req, res) => {
       req.session.user = profile.user;
     }
 
-    // Clean up popup flag
-    delete req.session.isPopup;
-
     // If popup mode, notify parent via localStorage and close
     if (isPopup) {
       return res.send(`
@@ -767,10 +767,30 @@ app.get('/auth/callback', async (req, res) => {
           <h2>Authorization successful!</h2>
           <p>This window will close automatically...</p>
           <script>
+            console.log('[Popup] OAuth complete, notifying parent...');
+
             // Use localStorage to notify parent (storage event fires in other windows)
             localStorage.setItem('oauth_complete', Date.now().toString());
             console.log('[Popup] Set oauth_complete in localStorage');
-            setTimeout(() => window.close(), 500);
+
+            // Try to close the popup window
+            function closePopup() {
+              try {
+                window.close();
+              } catch (e) {
+                console.log('[Popup] Could not close window:', e);
+              }
+            }
+
+            // Close after a short delay to ensure localStorage event fires
+            setTimeout(closePopup, 300);
+
+            // Fallback: if window didn't close after 2 seconds, show a manual close link
+            setTimeout(() => {
+              if (!window.closed) {
+                document.body.innerHTML = '<h2>Authorization successful!</h2><p>You can close this tab and return to the app.</p><button onclick="window.close()" style="padding: 10px 20px; font-size: 16px; cursor: pointer;">Close this tab</button>';
+              }
+            }, 2000);
           </script>
         </body>
         </html>
