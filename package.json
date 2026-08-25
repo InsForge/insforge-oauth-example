@@ -8,8 +8,7 @@
     "dev": "node --watch src/server.js"
   },
   "overrides": {
-    "path-to-regexp": "0.1.13",
-    "qs": "6.15.3"
+    "path-to-regexp": "0.1.13"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
