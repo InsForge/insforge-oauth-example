@@ -844,7 +844,17 @@ app.get('/api/organizations', async (req, res) => {
 // Start Server
 // =============================================================================
 
-app.listen(config.PORT, () => {
+// Express 5 hands bind errors (EADDRINUSE, EACCES) to this callback instead of
+// only emitting 'error'. A zero-argument callback would swallow them and print
+// the banner anyway, turning a failed bind into a false success -- so take the
+// error argument and fail loudly before anything claims to be running.
+app.listen(config.PORT, (err) => {
+  if (err) {
+    console.error(`Failed to start on port ${config.PORT}:`, err.message);
+    process.exitCode = 1;
+    return;
+  }
+
   console.log(`
 ╔═══════════════════════════════════════════════════════════════╗
 ║                                                               ║
