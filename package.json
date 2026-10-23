@@ -14,5 +14,8 @@
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "express-session": "^1.17.3"
+  },
+  "overrides": {
+    "proxy-addr": ">=2.0.8"
   }
 }
